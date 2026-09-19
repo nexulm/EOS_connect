@@ -355,23 +355,7 @@ class LoadInterface:
                         entity_id
                     )
 
-                    cache_start_time = None
-                    cache_end_time = None
                     if cached_history is not None:
-                        cache_start_time = self.__normalize_history_timestamp(
-                            cached_history["start_time"],
-                            start_time,
-                        )
-                        cache_end_time = self.__normalize_history_timestamp(
-                            cached_history["end_time"],
-                            end_time,
-                        )
-
-                    if (
-                        cached_history is not None
-                        and cache_start_time <= start_time
-                        and cache_end_time >= end_time
-                    ):
                         fallback_data = cached_history["data"]
 
                         filtered_data = []
@@ -383,19 +367,20 @@ class LoadInterface:
                             if start_time <= entry_time < end_time:
                                 filtered_data.append(entry)
 
-                        logger.debug(
-                            "[LOAD-IF] HOMEASSISTANT - Using cached history "
-                            "fallback for '%s' from %s to %s.",
-                            entity_id,
-                            start_time,
-                            end_time,
-                        )
+                        if filtered_data:
+                            logger.debug(
+                                "[LOAD-IF] HOMEASSISTANT - Using cached history "
+                                "fallback for '%s' from %s to %s.",
+                                entity_id,
+                                start_time,
+                                end_time,
+                            )
 
-                    else:
+                    if not filtered_data:
                         logger.debug(
                             "[LOAD-IF] HOMEASSISTANT - Empty history response "
-                            "for '%s' from %s to %s. Retrying up to current "
-                            "time %s.",
+                            "for '%s' from %s to %s. Retrying with end_time "
+                            "set to current time %s.",
                             entity_id,
                             start_time,
                             end_time,
@@ -416,9 +401,7 @@ class LoadInterface:
                         )
 
                         if fallback_response is not None:
-                            fallback_historical_data = (
-                                fallback_response.json()
-                            )
+                            fallback_historical_data = fallback_response.json()
 
                             fallback_data = [
                                 {
