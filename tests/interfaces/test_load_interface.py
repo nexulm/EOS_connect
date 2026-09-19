@@ -751,3 +751,94 @@ class TestAConnectedSourceThatReturnsNothing:
         _, _ = self._profile_with_no_data(config_fixture, caplog)
 
         assert [r for r in caplog.records if r.levelno == logging.WARNING] == []
+
+
+def test_fetch_historical_energy_data_from_homeassistant_history_fallback_cache(
+    config_fixture,
+):
+    """
+    Verify the Home Assistant history fallback.
+
+    HA may return an empty response for a historical interval even though
+    recorder data exists. The implementation must retry with an end_time
+    reaching the current time, filter the result to the requested interval,
+    and cache the extended history for subsequent hourly requests.
+    """
+    li = LoadInterface(config_fixture, 3600)
+
+    empty_response = MagicMock()
+    empty_response.json.return_value = []
+
+    fallback_response = MagicMock()
+    fallback_response.json.return_value = [
+        [
+            {
+                "state": "100",
+                "last_updated": "2023-07-01T00:00:00+00:00",
+            },
+            {
+                "state": "110",
+                "last_updated": "2023-07-01T00:30:00+00:00",
+            },
+            {
+                "state": "120",
+                "last_updated": "2023-07-01T01:00:00+00:00",
+            },
+            {
+                "state": "130",
+                "last_updated": "2023-07-01T01:30:00+00:00",
+            },
+        ]
+    ]
+
+    with patch(
+        "src.interfaces.load_interface.requests.get",
+        side_effect=[
+            empty_response,      # normal request: 00:00-01:00
+            fallback_response,   # fallback request: 00:00-now
+            empty_response,      # normal request: 01:00-02:00
+        ],
+    ) as mock_get, patch(
+        "src.interfaces.load_interface.time.sleep"
+    ), patch(
+        "src.interfaces.load_interface.logger"
+    ):
+        first_start = datetime.fromisoformat("2023-07-01T00:00:00+00:00")
+        first_end = datetime.fromisoformat("2023-07-01T01:00:00+00:00")
+
+        first_result = (
+            li._LoadInterface__fetch_historical_energy_data_from_homeassistant(
+                "sensor.test",
+                first_start,
+                first_end,
+            )
+        )
+
+        assert [entry["state"] for entry in first_result] == [
+            "100",
+            "110",
+        ]
+
+        second_start = datetime.fromisoformat("2023-07-01T01:00:00+00:00")
+        second_end = datetime.fromisoformat("2023-07-01T02:00:00+00:00")
+
+        second_result = (
+            li._LoadInterface__fetch_historical_energy_data_from_homeassistant(
+                "sensor.test",
+                second_start,
+                second_end,
+            )
+        )
+
+        assert [entry["state"] for entry in second_result] == [
+            "120",
+            "130",
+        ]
+
+        # 1. normal request for first hour
+        # 2. fallback request reaching current time
+        # 3. normal request for second hour
+        #
+        # No second fallback request must be necessary because the
+        # extended history is cached.
+        assert mock_get.call_count == 3

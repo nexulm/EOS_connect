@@ -72,6 +72,12 @@ class LoadInterface:
         self.time_zone = None
         self.request_timeout = request_timeout  # Store configurable timeout
 
+        # Cache for Home Assistant history fallback requests.
+        # HA may return an empty response for historical end_time values
+        # even though recorder data exists. The fallback retrieves the
+        # history up to the current time once and reuses it.
+        self.__homeassistant_history_cache = {}
+
         logger.debug("[LOAD-IF] Initializing LoadInterface with source: %s", self.src)
         logger.debug("[LOAD-IF] Using URL: %s", self.url)
         logger.debug("[LOAD-IF] Using access token: %s", self.access_token)
@@ -305,6 +311,7 @@ class LoadInterface:
             return []
         try:
             historical_data = response.json()
+
             filtered_data = [
                 {
                     "state": entry["state"],
@@ -314,6 +321,112 @@ class LoadInterface:
                 for sublist in historical_data
                 for entry in sublist
             ]
+
+            # Home Assistant can return an empty history response for a
+            # historical time window even though recorder data exists.
+            #
+            # In the affected case, extending end_time by a few minutes is
+            # not sufficient. The history API returns the data when the
+            # requested end_time reaches the current time.
+            #
+            # Retrieve that extended history only once per entity and cache it
+            # so subsequent hourly requests can use the cached data.
+            if not filtered_data:
+                now = datetime.now(end_time.tzinfo)
+
+                if now > end_time:
+                    cached_history = self.__homeassistant_history_cache.get(
+                        entity_id
+                    )
+
+                    if (
+                        cached_history is not None
+                        and cached_history["start_time"] <= start_time
+                        and cached_history["end_time"] >= end_time
+                    ):
+                        fallback_data = cached_history["data"]
+
+                        filtered_data = [
+                            entry
+                            for entry in fallback_data
+                            if start_time
+                            <= datetime.fromisoformat(entry["last_updated"])
+                            < end_time
+                        ]
+
+                        logger.debug(
+                            "[LOAD-IF] HOMEASSISTANT - Using cached history "
+                            "fallback for '%s' from %s to %s.",
+                            entity_id,
+                            start_time,
+                            end_time,
+                        )
+
+                    else:
+                        logger.debug(
+                            "[LOAD-IF] HOMEASSISTANT - Empty history response "
+                            "for '%s' from %s to %s. Retrying up to current "
+                            "time %s.",
+                            entity_id,
+                            start_time,
+                            end_time,
+                            now,
+                        )
+
+                        fallback_params = {
+                            "filter_entity_id": entity_id,
+                            "end_time": now.isoformat(),
+                        }
+
+                        fallback_response = self.__request_with_retries(
+                            "get",
+                            url,
+                            params=fallback_params,
+                            headers=headers,
+                            item_label=entity_id,
+                        )
+
+                        if fallback_response is not None:
+                            fallback_historical_data = (
+                                fallback_response.json()
+                            )
+
+                            fallback_data = [
+                                {
+                                    "state": entry["state"],
+                                    "last_updated": entry["last_updated"],
+                                    "attributes": entry.get("attributes", {}),
+                                }
+                                for sublist in fallback_historical_data
+                                for entry in sublist
+                            ]
+
+                            if fallback_data:
+                                self.__homeassistant_history_cache[entity_id] = {
+                                    "start_time": start_time,
+                                    "end_time": now,
+                                    "data": fallback_data,
+                                }
+
+                                filtered_data = [
+                                    entry
+                                    for entry in fallback_data
+                                    if start_time
+                                    <= datetime.fromisoformat(
+                                        entry["last_updated"]
+                                    )
+                                    < end_time
+                                ]
+
+                                logger.debug(
+                                    "[LOAD-IF] HOMEASSISTANT - History fallback "
+                                    "returned %d samples for '%s'; filtered "
+                                    "to original interval %s to %s.",
+                                    len(fallback_data),
+                                    entity_id,
+                                    start_time,
+                                    end_time,
+                                )
 
             # if device_class is energy, convert to power
             if (
