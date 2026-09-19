@@ -233,6 +233,22 @@ class LoadInterface:
                 sleep_seconds = sleep_seconds + random.uniform(0, sleep_seconds * 0.5)
                 time.sleep(sleep_seconds)
 
+    def __normalize_history_timestamp(self, timestamp, reference_time):
+        """Normalize a history timestamp for comparison with a reference time.
+
+        Home Assistant returns ISO timestamps with timezone information, while
+        EOS Connect can internally use naive datetimes. Python does not allow
+        comparisons between naive and timezone-aware datetimes, so normalize
+        only the timezone metadata while preserving the local wall-clock time.
+        """
+        if reference_time.tzinfo is None and timestamp.tzinfo is not None:
+            return timestamp.replace(tzinfo=None)
+
+        if reference_time.tzinfo is not None and timestamp.tzinfo is None:
+            return timestamp.replace(tzinfo=reference_time.tzinfo)
+
+        return timestamp
+
     # get load data from url persistance source
     def fetch_historical_energy_data(self, entity_id, start_time, end_time):
         """
@@ -339,20 +355,33 @@ class LoadInterface:
                         entity_id
                     )
 
+                    cache_start_time = None
+                    cache_end_time = None
+                    if cached_history is not None:
+                        cache_start_time = self.__normalize_history_timestamp(
+                            cached_history["start_time"],
+                            start_time,
+                        )
+                        cache_end_time = self.__normalize_history_timestamp(
+                            cached_history["end_time"],
+                            end_time,
+                        )
+
                     if (
                         cached_history is not None
-                        and cached_history["start_time"] <= start_time
-                        and cached_history["end_time"] >= end_time
+                        and cache_start_time <= start_time
+                        and cache_end_time >= end_time
                     ):
                         fallback_data = cached_history["data"]
 
-                        filtered_data = [
-                            entry
-                            for entry in fallback_data
-                            if start_time
-                            <= datetime.fromisoformat(entry["last_updated"])
-                            < end_time
-                        ]
+                        filtered_data = []
+                        for entry in fallback_data:
+                            entry_time = self.__normalize_history_timestamp(
+                                datetime.fromisoformat(entry["last_updated"]),
+                                start_time,
+                            )
+                            if start_time <= entry_time < end_time:
+                                filtered_data.append(entry)
 
                         logger.debug(
                             "[LOAD-IF] HOMEASSISTANT - Using cached history "
@@ -408,15 +437,14 @@ class LoadInterface:
                                     "data": fallback_data,
                                 }
 
-                                filtered_data = [
-                                    entry
-                                    for entry in fallback_data
-                                    if start_time
-                                    <= datetime.fromisoformat(
-                                        entry["last_updated"]
+                                filtered_data = []
+                                for entry in fallback_data:
+                                    entry_time = self.__normalize_history_timestamp(
+                                        datetime.fromisoformat(entry["last_updated"]),
+                                        start_time,
                                     )
-                                    < end_time
-                                ]
+                                    if start_time <= entry_time < end_time:
+                                        filtered_data.append(entry)
 
                                 logger.debug(
                                     "[LOAD-IF] HOMEASSISTANT - History fallback "
