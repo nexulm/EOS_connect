@@ -636,6 +636,11 @@ class LoadInterface:
                     entity_id,
                     len(long_term_data),
                 )
+                logger.info(
+                    "[LOAD-IF] HOMEASSISTANT - Hourly statistic timestamps for '%s': %s",
+                    entity_id,
+                    [entry["last_updated"] for entry in long_term_data],
+                )
                 self.__homeassistant_history_cache[entity_id] = {
                     "start_time": start_time,
                     "end_time": end_time,
