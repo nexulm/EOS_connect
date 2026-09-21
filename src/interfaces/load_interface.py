@@ -1104,9 +1104,33 @@ class LoadInterface:
                 add_load_data_1_energy, 0
             )  # prevent negative values
 
+            # DEBUG: inspect the normalized Home Assistant statistics passed to
+            # the household energy calculation.
+            if self.src == "homeassistant" and self.load_sensor:
+                logger.warning(
+                    "[LOAD-IF][DEBUG] household input %s %s-%s: %d samples | first=%s | last=%s",
+                    self.load_sensor,
+                    current_time_slot,
+                    next_slot,
+                    len(energy_data) if energy_data else 0,
+                    energy_data[:3] if energy_data else [],
+                    energy_data[-3:] if energy_data else [],
+                )
+
             energy = abs(
                 self.__process_energy_data({"data": energy_data}, self.load_sensor)
             )
+
+            # DEBUG: inspect the calculated average household power.
+            if self.src == "homeassistant" and self.load_sensor:
+                logger.warning(
+                    "[LOAD-IF][DEBUG] household result %s %s-%s: %.4f W -> %.4f Wh",
+                    self.load_sensor,
+                    current_time_slot,
+                    next_slot,
+                    energy,
+                    energy * (self.time_frame_base / 3600.0),
+                )
 
             # Convert average power (W) to energy (Wh) for the interval
             interval_hours = self.time_frame_base / 3600.0
