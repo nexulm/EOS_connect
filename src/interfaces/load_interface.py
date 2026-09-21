@@ -645,11 +645,6 @@ class LoadInterface:
                     entity_id,
                     len(long_term_data),
                 )
-                logger.info(
-                    "[LOAD-IF] HOMEASSISTANT - Hourly statistic timestamps for '%s': %s",
-                    entity_id,
-                    [entry["last_updated"] for entry in long_term_data],
-                )
                 self.__homeassistant_history_cache[entity_id] = {
                     "start_time": start_time,
                     "end_time": end_time,
@@ -1041,9 +1036,26 @@ class LoadInterface:
             # weekday-profile logic can fall back to the available comparison day
             # instead of converting the missing day into 24 zero values.
             cached_load = self.__homeassistant_history_cache.get(self.load_sensor)
-            if not cached_load or not (cached_load.get("data") or []):
+            cached_data = cached_load.get("data") if cached_load else []
+            day_data = []
+
+            # The history cache may contain samples returned by Home Assistant
+            # that fall outside the requested day. Therefore cache presence alone
+            # is not proof that this complete comparison day has data.
+            for entry in cached_data or []:
+                try:
+                    entry_time = datetime.fromisoformat(entry["last_updated"])
+                    entry_time = self.__normalize_history_timestamp(
+                        entry_time, start_time
+                    )
+                    if entry_time is not None and start_time <= entry_time <= end_time:
+                        day_data.append(entry)
+                except (KeyError, TypeError, ValueError):
+                    continue
+
+            if len(day_data) < 2:
                 logger.debug(
-                    "[LOAD-IF] No Home Assistant load data available for '%s' "
+                    "[LOAD-IF] No complete Home Assistant load data available for '%s' "
                     "from %s to %s. Returning empty day profile.",
                     self.load_sensor,
                     start_time,
